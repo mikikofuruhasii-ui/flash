@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>超高機能 POS ＆ 商品マスター管理システム</title>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 500: '#2563eb', 600: '#1d4ed8' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @media print {
+            body * { visibility: hidden; }
+            #receipt-modal, #receipt-modal * { visibility: visible; }
+            #receipt-modal { position: absolute; left: 0; top: 0; width: 100%; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200">
+
+    <div id="app" class="h-screen flex flex-col">
+        <!-- ヘッダー / メニューナビゲーション -->
+        <header class="bg-slate-800 text-white px-4 py-2 flex justify-between items-center shadow-md">
+            <div class="flex items-center space-x-3">
+                <span class="font-bold text-xl tracking-wider text-blue-400">⚡ SUPER POS 34+</span>
+                
+                <!-- 画面切替タブ -->
+                <nav class="flex space-x-1 bg-slate-700 p-1 rounded-lg text-xs font-bold">
+                    <button id="tab-pos-btn" onclick="switchTab('pos')" class="px-3 py-1.5 rounded bg-blue-600 text-white shadow">🛒 レジ会計</button>
+                    <button id="tab-master-btn" onclick="switchTab('master')" class="px-3 py-1.5 rounded text-gray-300 hover:text-white">📦 商品登録・管理</button>
+                </nav>
+
+                <!-- ログイン情報＆拡張ステータス -->
+                <span class="px-2 py-0.5 text-xs rounded bg-blue-900/80 text-blue-200 border border-blue-600 font-bold">
+                    👤 担当: {{ session.get('username') }} (ID: {{ session.get('staff_id') }})
+                </span>
+                <span class="px-2 py-0.5 text-xs rounded bg-purple-900/80 text-purple-200 border border-purple-600">
+                    {{ session.get('loylo_status') }}
+                </span>
+                <span class="px-2 py-0.5 text-xs rounded bg-amber-900/80 text-amber-200 border border-amber-600">
+                    {{ session.get('stealth_status') }}
+                </span>
+            </div>
+            
+            <div class="flex items-center space-x-2 text-sm">
+                <button onclick="toggleSound()" id="sound-btn" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded flex items-center">
+                    🔊 音声: ON
+                </button>
+                <button onclick="toggleDarkMode()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded">
+                    🌙/☀️ テーマ
+                </button>
+                <button onclick="openManagerModal()" class="bg-amber-600 hover:bg-amber-700 px-3 py-1 rounded font-bold">
+                    🔒 管理者認証
+                </button>
+                <button onclick="openZReport()" class="bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded font-bold">
+                    📊 売上集計
+                </button>
+                <a href="/logout" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-1 rounded font-bold text-xs">
+                    🚪 ログアウト
+                </a>
+            </div>
+        </header>
+
+        <!-- メインコンテンツエリア -->
+        <div class="flex-1 overflow-hidden relative">
+
+            <!-- ================= PAGE 1: レジ会計画面 ================= -->
+            <div id="page-pos" class="h-full flex">
+                <!-- 左側: 商品選択 & クイック棚 -->
+                <div class="w-7/12 p-4 flex flex-col justify-between border-r dark:border-gray-700 bg-white dark:bg-gray-800">
+                    <div>
+                        <!-- バーコード ＆ 検索バー -->
+                        <div class="grid grid-cols-12 gap-2 mb-3">
+                            <input type="text" id="barcode-input" placeholder="JANコード直接入力" 
+                                   class="col-span-4 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 text-sm focus:ring-2 focus:ring-blue-500"
+                                   onkeypress="if(event.key==='Enter') scanBarcode()">
+                            <input type="text" id="search-input" placeholder="商品名で検索..." 
+                                   class="col-span-6 p-2 border rounded dark:bg-gray-700 dark:border-gray-600 text-sm"
+                                   oninput="filterProducts()">
+                            <button onclick="scanBarcode()" class="col-span-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">スキャン</button>
+                        </div>
+
+                        <!-- オプションボタン -->
+                        <div class="flex space-x-2 mb-3">
+                            <button onclick="addBag(5)" class="bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs px-2 py-1.5 rounded border border-amber-300">🛍️ 袋S (¥5)</button>
+                            <button onclick="addBag(10)" class="bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-xs px-2 py-1.5 rounded border border-amber-300">🛍️ 袋L (¥10)</button>
+                            <button onclick="addGiftWrap(150)" class="bg-pink-100 dark:bg-pink-900/40 text-pink-800 dark:text-pink-200 text-xs px-2 py-1.5 rounded border border-pink-300">🎁 ギフト (¥150)</button>
+                            <button onclick="openCustomItemModal()" class="bg-slate-200 dark:bg-slate-700 text-xs px-2 py-1.5 rounded">➕ 非登録商品入力</button>
+                        </div>
+
+                        <!-- クイック商品パネル -->
+                        <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">クイック商品棚</h3>
+                        <div id="product-grid" class="grid grid-cols-3 gap-2 overflow-y-auto max-h-[calc(100vh-280px)] p-1">
+                            <!-- JSで動的生成 -->
+                        </div>
+                    </div>
+
+                    <!-- 下部特殊機能ボタン -->
+                    <div class="grid grid-cols-5 gap-2 pt-3 border-t dark:border-gray-700">
+                        <button onclick="openMemberModal()" class="bg-indigo-600 text-white py-2 rounded text-xs font-bold hover:bg-indigo-700">👤 会員<br><span id="member-status" class="text-[10px] font-normal">未認証</span></button>
+                        <button onclick="holdCart()" class="bg-orange-500 text-white py-2 rounded text-xs font-bold hover:bg-orange-600">⏸️ カート保留</button>
+                        <button onclick="openHoldList()" class="bg-orange-600 text-white py-2 rounded text-xs font-bold hover:bg-orange-700">📋 呼出 (<span id="hold-count">0</span>)</button>
+                        <button onclick="openDrawer()" class="bg-gray-600 text-white py-2 rounded text-xs font-bold hover:bg-gray-700">🔓 ドロワー開放</button>
+                        <button onclick="toggleRefundMode()" class="bg-rose-700 text-white py-2 rounded text-xs font-bold hover:bg-rose-800">🔄 返品モード</button>
+                    </div>
+                </div>
+
+                <!-- 右側: 明細カート & 決済計算 -->
+                <div class="w-5/12 bg-slate-50 dark:bg-gray-900 p-4 flex flex-col justify-between">
+                    <div>
+                        <div class="flex justify-between items-center pb-2 border-b dark:border-gray-700">
+                            <h2 class="font-bold text-lg">購入明細</h2>
+                            <div class="space-x-1">
+                                <button onclick="toggleTaxFree()" id="taxfree-btn" class="px-2 py-1 text-xs border rounded bg-white dark:bg-gray-800">免税: OFF</button>
+                                <button onclick="clearCart()" class="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200">全消去</button>
+                            </div>
+                        </div>
+
+                        <div id="cart-items" class="overflow-y-auto max-h-[calc(100vh-420px)] my-2 space-y-2">
+                            <!-- JSで動的描画 -->
+                        </div>
+                    </div>
+
+                    <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-inner border dark:border-gray-700 space-y-2">
+                        <div class="flex space-x-2 text-xs">
+                            <button onclick="applyDiscount('percent')" class="flex-1 bg-amber-500 text-white py-1 rounded">％割引</button>
+                            <button onclick="applyDiscount('fixed')" class="flex-1 bg-amber-600 text-white py-1 rounded">値引き(円)</button>
+                            <button onclick="usePoints()" class="flex-1 bg-indigo-500 text-white py-1 rounded">pt利用</button>
+                        </div>
+
+                        <div class="text-xs space-y-1 text-gray-600 dark:text-gray-300 pt-1 border-t dark:border-gray-700">
+                            <div class="flex justify-between"><span>小計 (税抜):</span><span id="subtotal-val">¥0</span></div>
+                            <div class="flex justify-between"><span>消費税:</span><span id="tax-val">¥0</span></div>
+                            <div class="flex justify-between text-amber-600"><span>値引き:</span><span id="discount-val">-¥0</span></div>
+                            <div class="flex justify-between text-indigo-500"><span>獲得予定pt:</span><span id="points-val">0 pt</span></div>
+                        </div>
+
+                        <div class="flex justify-between items-baseline pt-2 border-t dark:border-gray-700">
+                            <span class="font-bold text-lg">合計 (税込):</span>
+                            <span id="total-val" class="font-black text-3xl text-blue-600 dark:text-blue-400">¥0</span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2 pt-2">
+                            <button onclick="processPayment('cash')" class="bg-green-600 hover:bg-green-700 text-white py-3 rounded font-bold text-sm shadow">💵 現金会計</button>
+                            <button onclick="processPayment('card')" class="bg-blue-600 hover:bg-blue-700 text-white py-3 rounded font-bold text-sm shadow">💳 クレジット</button>
+                            <button onclick="processPayment('qr')" class="bg-red-500 hover:bg-red-600 text-white py-2 rounded font-bold text-xs shadow">📱 QR/電子マネー</button>
+                            <button onclick="processPayment('split')" class="bg-purple-600 hover:bg-purple-700 text-white py-2 rounded font-bold text-xs shadow">🔀 分割/併用</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================= PAGE 2: 商品登録・マスター管理画面 ================= -->
+            <div id="page-master" class="h-full hidden flex flex-col p-6 overflow-y-auto bg-slate-50 dark:bg-gray-900">
+                <div class="max-w-6xl mx-auto w-full space-y-6">
+                    
+                    <div class="flex justify-between items-center border-b pb-4 dark:border-gray-700">
+                        <div>
+                            <h2 class="text-2xl font-bold">📦 商品マスター管理・新規登録</h2>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">レジで販売する商品の登録、価格変更、在庫管理を行います。</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button onclick="exportCSV()" class="bg-emerald-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-emerald-700">📥 CSVエクスポート</button>
+                            <button onclick="importCSV()" class="bg-sky-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-sky-700">📤 CSV一括インポート</button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-12 gap-6">
+                        <div class="col-span-4 bg-white dark:bg-gray-800 p-5 rounded-lg shadow border dark:border-gray-700 space-y-4">
+                            <h3 class="font-bold text-base border-b pb-2 dark:border-gray-700 flex items-center">
+                                <span class="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs mr-2">＋</span>
+                                商品新規登録
+                            </h3>
+                            
+                            <form id="product-form" onsubmit="saveProduct(event)" class="space-y-3 text-xs">
+                                <input type="hidden" id="form-product-id">
+
+                                <div>
+                                    <label class="block font-bold mb-1">JAN/バーコード *</label>
+                                    <div class="flex space-x-1">
+                                        <input type="text" id="form-jan" required placeholder="例: 4901234567890" class="flex-1 p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                        <button type="button" onclick="generateRandomJAN()" class="bg-gray-200 dark:bg-gray-700 px-2 rounded hover:bg-gray-300">自動生成</button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block font-bold mb-1">商品名 *</label>
+                                    <input type="text" id="form-name" required placeholder="例: プレミアムコーヒー 180g" class="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block font-bold mb-1">価格 (税抜) *</label>
+                                        <input type="number" id="form-price" required placeholder="298" class="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold mb-1">消費税率 *</label>
+                                        <select id="form-tax" class="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                            <option value="0.08">軽減税率 (8%)</option>
+                                            <option value="0.10" selected>標準税率 (10%)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block font-bold mb-1">初期在庫数</label>
+                                        <input type="number" id="form-stock" value="50" class="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold mb-1">カテゴリ</label>
+                                        <select id="form-category" class="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600">
+                                            <option value="food">食品・飲料</option>
+                                            <option value="goods">日用品・雑貨</option>
+                                            <option value="book">書籍・雑誌</option>
+                                            <option value="other">その他</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="pt-2">
+                                    <label class="inline-flex items-center space-x-2 cursor-pointer">
+                                        <input type="checkbox" id="form-agelimited" class="rounded text-blue-600">
+                                        <span class="font-bold text-red-600 dark:text-red-400">年齢制限商品 (酒・たばこ等 20歳以上)</span>
+                                    </label>
+                                </div>
+
+                                <div class="pt-3 flex space-x-2">
+                                    <button type="button" onclick="resetProductForm()" class="flex-1 bg-gray-300 dark:bg-gray-700 py-2 rounded font-bold">クリア</button>
+                                    <button type="submit" class="flex-2 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded font-bold">商品マスターに保存</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <div class="col-span-8 bg-white dark:bg-gray-800 p-5 rounded-lg shadow border dark:border-gray-700 flex flex-col justify-between">
+                            <div>
+                                <div class="flex justify-between items-center pb-3 mb-3 border-b dark:border-gray-700">
+                                    <h3 class="font-bold text-base">📋 登録済み商品一覧 (<span id="master-count">0</span>件)</h3>
+                                    <input type="text" id="master-search" oninput="renderMasterTable()" placeholder="商品名/JANで絞り込み..." class="p-1.5 border rounded text-xs dark:bg-gray-700 dark:border-gray-600 w-48">
+                                </div>
+
+                                <div class="overflow-x-auto max-h-[500px]">
+                                    <table class="w-full text-left text-xs border-collapse">
+                                        <thead>
+                                            <tr class="bg-gray-100 dark:bg-gray-700 border-b dark:border-gray-600">
+                                                <th class="p-2">JAN</th>
+                                                <th class="p-2">商品名</th>
+                                                <th class="p-2">単価(税抜)</th>
+                                                <th class="p-2">税率</th>
+                                                <th class="p-2">在庫</th>
+                                                <th class="p-2">属性</th>
+                                                <th class="p-2 text-right">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="master-table-body" class="divide-y dark:divide-gray-700">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- モーダル群 -->
+    <div id="age-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-md w-full text-center">
+            <h3 class="text-xl font-bold text-red-600 mb-2">⚠️ 年齢確認が必要です</h3>
+            <p class="text-sm mb-4">酒類・たばこ等の年齢制限商品が含まれています。<br>お客様は20歳以上ですか？</p>
+            <div class="flex space-x-4">
+                <button onclick="confirmAge(false)" class="flex-1 bg-gray-400 text-white py-2 rounded">いいえ (購入不可)</button>
+                <button onclick="confirmAge(true)" class="flex-1 bg-red-600 text-white py-2 rounded font-bold">はい (20歳以上)</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="cash-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-sm w-full space-y-4">
+            <h3 class="font-bold text-lg">💵 現金お会計</h3>
+            <div>
+                <label class="text-xs text-gray-500">お支払い請求額</label>
+                <div id="cash-modal-total" class="text-2xl font-bold text-blue-600">¥0</div>
+            </div>
+            <div>
+                <label class="text-xs text-gray-500">預かり金額入力</label>
+                <input type="number" id="tendered-input" oninput="calcChange()" class="w-full border p-2 text-xl font-bold rounded dark:bg-gray-700" placeholder="0">
+            </div>
+            <div class="flex justify-between items-center text-lg font-bold border-t pt-2">
+                <span>お釣り:</span>
+                <span id="change-val" class="text-green-600">¥0</span>
+            </div>
+            <div class="flex space-x-2">
+                <button onclick="closeModal('cash-modal')" class="flex-1 bg-gray-300 dark:bg-gray-700 py-2 rounded">キャンセル</button>
+                <button onclick="completeCashTransaction()" class="flex-1 bg-green-600 text-white py-2 rounded font-bold">会計完了</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="receipt-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white text-gray-800 p-6 rounded-lg max-w-sm w-full font-mono text-sm shadow-xl space-y-3">
+            <div class="text-center border-b pb-2">
+                <h2 class="font-bold text-lg">SUPER POS STORE</h2>
+                <p class="text-xs text-gray-500">東京都千代田区1-1-1 / TEL: 03-0000-0000</p>
+                <p id="receipt-date" class="text-[10px] text-gray-400 mt-1"></p>
+            </div>
+            <div id="receipt-body" class="space-y-1 text-xs border-b pb-2"></div>
+            <div id="receipt-summary" class="space-y-1 text-xs"></div>
+            
+            <div class="pt-2 flex flex-col space-y-2 no-print">
+                <button onclick="window.print()" class="bg-blue-600 text-white py-1.5 rounded text-xs font-bold">🖨️ レシート印刷</button>
+                <button onclick="sendEReceipt()" class="bg-purple-600 text-white py-1.5 rounded text-xs font-bold">✉️ 電子レシート送信</button>
+                <button onclick="finishReceipt()" class="bg-gray-700 text-white py-1.5 rounded text-xs">閉じて新規会計へ</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="manager-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-xs w-full text-center space-y-3">
+            <h3 class="font-bold text-base">🔒 管理者パスコード認証</h3>
+            <p class="text-xs text-gray-500">パスコード "1234" を入力してください</p>
+            <input type="password" id="pin-input" maxlength="4" class="text-center text-2xl tracking-widest border p-2 rounded w-full dark:bg-gray-700">
+            <div class="flex space-x-2">
+                <button onclick="closeModal('manager-modal')" class="flex-1 bg-gray-300 dark:bg-gray-700 py-1.5 rounded text-xs">キャンセル</button>
+                <button onclick="verifyPin()" class="flex-1 bg-amber-600 text-white py-1.5 rounded text-xs font-bold">承認</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="zreport-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-md w-full space-y-4">
+            <h3 class="font-bold text-lg border-b pb-2">📊 日計・売上集計レポート (Zレポート)</h3>
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between"><span>本日総売上高:</span><span id="z-total" class="font-bold">¥0</span></div>
+                <div class="flex justify-between"><span>総取引件数:</span><span id="z-count">0 件</span></div>
+                <div class="flex justify-between text-xs text-gray-500"><span>内 現金決済:</span><span id="z-cash">¥0</span></div>
+                <div class="flex justify-between text-xs text-gray-500"><span>内 キャッシュレス:</span><span id="z-card">¥0</span></div>
+            </div>
+            <button onclick="closeModal('zreport-modal')" class="w-full bg-slate-700 text-white py-2 rounded text-xs">閉じる</button>
+        </div>
+    </div>
+
+    <div id="member-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-xs w-full space-y-3">
+            <h3 class="font-bold text-base">👤 会員証スキャン</h3>
+            <input type="text" id="member-id-input" placeholder="会員番号 (例: MEM01)" class="w-full border p-2 rounded text-sm dark:bg-gray-700">
+            <div class="flex space-x-2">
+                <button onclick="closeModal('member-modal')" class="flex-1 bg-gray-300 dark:bg-gray-700 py-1.5 rounded text-xs">キャンセル</button>
+                <button onclick="applyMember()" class="flex-1 bg-indigo-600 text-white py-1.5 rounded text-xs font-bold">認証</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="custom-item-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-xs w-full space-y-3">
+            <h3 class="font-bold text-base">➕ カスタム金額商品入力</h3>
+            <input type="text" id="custom-name" placeholder="商品名" class="w-full border p-2 rounded text-sm dark:bg-gray-700">
+            <input type="number" id="custom-price" placeholder="価格 (税抜)" class="w-full border p-2 rounded text-sm dark:bg-gray-700">
+            <div class="flex space-x-2">
+                <button onclick="closeModal('custom-item-modal')" class="flex-1 bg-gray-300 dark:bg-gray-700 py-1.5 rounded text-xs">キャンセル</button>
+                <button onclick="addCustomItem()" class="flex-1 bg-blue-600 text-white py-1.5 rounded text-xs font-bold">カート追加</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let products = [
+            { id: '101', jan: '49012341', name: '高級お弁当', price: 680, taxRate: 0.08, category: 'food', stock: 15, ageLimit: false },
+            { id: '102', jan: '49012342', name: '緑茶 500ml', price: 150, taxRate: 0.08, category: 'food', stock: 40, ageLimit: false },
+            { id: '103', jan: '49012343', name: '缶ビール 350ml', price: 220, taxRate: 0.10, category: 'food', stock: 24, ageLimit: true },
+            { id: '104', jan: '49012344', name: '雑誌 月刊POS', price: 800, taxRate: 0.10, category: 'book', stock: 5, ageLimit: false },
+            { id: '105', jan: '49012345', name: '高級和牛パック', price: 2500, taxRate: 0.08, category: 'food', stock: 3, ageLimit: false },
+            { id: '106', jan: '49012346', name: '傘 (ビニール)', price: 600, taxRate: 0.10, category: 'goods', stock: 10, ageLimit: false },
+        ];
+
+        let cart = [];
+        let holds = [];
+        let activeMember = null;
+        let isTaxFree = false;
+        let isRefundMode = false;
+        let soundEnabled = true;
+        let isManagerAuthenticated = false;
+        let discountAmount = 0;
+        let discountPercent = 0;
+        let usedPoints = 0;
+
+        let zReportData = { totalSales: 0, count: 0, cash: 0, card: 0 };
+
+        window.onload = () => {
+            renderProducts(products);
+            renderMasterTable();
+            updateCartUI();
+        };
+
+        function switchTab(tabName) {
+            const pagePos = document.getElementById('page-pos');
+            const pageMaster = document.getElementById('page-master');
+            const btnPos = document.getElementById('tab-pos-btn');
+            const btnMaster = document.getElementById('tab-master-btn');
+
+            if (tabName === 'pos') {
+                pagePos.classList.remove('hidden');
+                pageMaster.classList.add('hidden');
+                btnPos.className = "px-3 py-1.5 rounded bg-blue-600 text-white shadow";
+                btnMaster.className = "px-3 py-1.5 rounded text-gray-300 hover:text-white";
+                renderProducts(products);
+            } else {
+                pagePos.classList.add('hidden');
+                pageMaster.classList.remove('hidden');
+                btnMaster.className = "px-3 py-1.5 rounded bg-blue-600 text-white shadow";
+                btnPos.className = "px-3 py-1.5 rounded text-gray-300 hover:text-white";
+                renderMasterTable();
+            }
+        }
+
+        function generateRandomJAN() {
+            const randomJan = '49' + Math.floor(Math.random() * 100000000000).toString().padStart(11, '0');
+            document.getElementById('form-jan').value = randomJan;
+        }
+
+        function saveProduct(event) {
+            event.preventDefault();
+            const editId = document.getElementById('form-product-id').value;
+            const jan = document.getElementById('form-jan').value.trim();
+            const name = document.getElementById('form-name').value.trim();
+            const price = parseFloat(document.getElementById('form-price').value);
+            const taxRate = parseFloat(document.getElementById('form-tax').value);
+            const stock = parseInt(document.getElementById('form-stock').value) || 0;
+            const category = document.getElementById('form-category').value;
+            const ageLimit = document.getElementById('form-agelimited').checked;
+
+            if (editId) {
+                const idx = products.findIndex(p => p.id === editId);
+                if (idx !== -1) {
+                    products[idx] = { id: editId, jan, name, price, taxRate, category, stock, ageLimit };
+                }
+            } else {
+                const newId = 'prod_' + Date.now();
+                products.push({ id: newId, jan, name, price, taxRate, category, stock, ageLimit });
+            }
+
+            playBeep(1200, 'sine');
+            resetProductForm();
+            renderMasterTable();
+            alert('商品マスターを更新しました！');
+        }
+
+        function resetProductForm() {
+            document.getElementById('form-product-id').value = '';
+            document.getElementById('product-form').reset();
+        }
+
+        function renderMasterTable() {
+            const tbody = document.getElementById('master-table-body');
+            const query = document.getElementById('master-search').value.toLowerCase();
+
+            const filtered = products.filter(p => p.name.toLowerCase().includes(query) || p.jan.includes(query));
+            document.getElementById('master-count').innerText = filtered.length;
+
+            tbody.innerHTML = filtered.map(p => `
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td class="p-2 font-mono text-[11px]">${p.jan}</td>
+                    <td class="p-2 font-bold">${p.name}</td>
+                    <td class="p-2">¥${p.price}</td>
+                    <td class="p-2">${p.taxRate * 100}%</td>
+                    <td class="p-2 font-bold ${p.stock < 10 ? 'text-red-500' : ''}">${p.stock}</td>
+                    <td class="p-2">${p.ageLimit ? '<span class="bg-red-100 text-red-600 px-1 rounded text-[10px]">20+</span>' : '-'}</td>
+                    <td class="p-2 text-right space-x-1">
+                        <button onclick="editProduct('${p.id}')" class="bg-amber-500 text-white px-2 py-0.5 rounded text-[10px]">編集</button>
+                        <button onclick="deleteProduct('${p.id}')" class="bg-red-600 text-white px-2 py-0.5 rounded text-[10px]">削除</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function editProduct(id) {
+            const p = products.find(prod => prod.id === id);
+            if (!p) return;
+            document.getElementById('form-product-id').value = p.id;
+            document.getElementById('form-jan').value = p.jan;
+            document.getElementById('form-name').value = p.name;
+            document.getElementById('form-price').value = p.price;
+            document.getElementById('form-tax').value = p.taxRate;
+            document.getElementById('form-stock').value = p.stock;
+            document.getElementById('form-category').value = p.category;
+            document.getElementById('form-agelimited').checked = p.ageLimit;
+        }
+
+        function deleteProduct(id) {
+            if (confirm('この商品をマスターから削除しますか？')) {
+                products = products.filter(p => p.id !== id);
+                renderMasterTable();
+            }
+        }
+
+        function exportCSV() {
+            let csvContent = "data:text/csv;charset=utf-8,JAN,商品名,価格,税率,在庫,カテゴリ,年齢制限\n";
+            products.forEach(p => {
+                csvContent += `${p.jan},${p.name},${p.price},${p.taxRate},${p.stock},${p.category},${p.ageLimit}\n`;
+            });
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `product_master_${Date.now()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function importCSV() {
+            alert('CSVインポート機能: デモデータを読み込みます');
+            products.push(
+                { id: 'imp_1', jan: '49099991', name: '輸入クラフトビール', price: 550, taxRate: 0.10, category: 'food', stock: 30, ageLimit: true },
+                { id: 'imp_2', jan: '49099992', name: '有機オーガニックナッツ', price: 320, taxRate: 0.08, category: 'food', stock: 50, ageLimit: false }
+            );
+            renderMasterTable();
+        }
+
+        function playBeep(freq = 800, type = 'sine', duration = 0.08) {
+            if (!soundEnabled) return;
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = type;
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+                osc.stop(ctx.currentTime + duration);
+            } catch(e){}
+        }
+
+        function renderProducts(items) {
+            const grid = document.getElementById('product-grid');
+            grid.innerHTML = items.map(p => `
+                <button onclick="tryAddToCart('${p.id}')" class="p-3 border rounded-lg bg-slate-50 hover:bg-blue-50 dark:bg-gray-700 dark:hover:bg-gray-600 text-left transition flex flex-col justify-between h-24">
+                    <div>
+                        <div class="font-bold text-sm truncate">${p.name}</div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">¥${p.price} (${p.taxRate*100}%)</div>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="${p.stock < 10 ? 'text-red-500 font-bold' : 'text-gray-400'}">在庫:${p.stock}</span>
+                        ${p.ageLimit ? '<span class="bg-red-100 text-red-600 px-1 rounded">20+</span>' : ''}
+                    </div>
+                </button>
+            `).join('');
+        }
+
+        function tryAddToCart(productId) {
+            const product = products.find(p => p.id === productId);
+            if (!product) return;
+            if (product.stock <= 0) { alert('⚠️ 在庫切れです！'); return; }
+            if (product.ageLimit && !cart.some(i => i.ageLimit)) {
+                pendingAgeProduct = product;
+                document.getElementById('age-modal').classList.remove('hidden');
+                return;
+            }
+            addToCart(product);
+        }
+
+        let pendingAgeProduct = null;
+        function confirmAge(isAdult) {
+            document.getElementById('age-modal').classList.add('hidden');
+            if (isAdult && pendingAgeProduct) { addToCart(pendingAgeProduct); }
+            else { alert('年齢確認が取れないためキャンセルしました'); }
+            pendingAgeProduct = null;
+        }
+
+        function addToCart(product) {
+            playBeep(1000, 'sine');
+            const existing = cart.find(i => i.id === product.id);
+            if (existing) { existing.qty++; }
+            else { cart.push({ ...product, qty: 1 }); }
+            product.stock--;
+            renderProducts(products);
+            updateCartUI();
+        }
+
+        function scanBarcode() {
+            const input = document.getElementById('barcode-input');
+            const val = input.value.trim();
+            const product = products.find(p => p.jan === val);
+            if (product) { tryAddToCart(product.id); input.value = ''; }
+            else { alert('商品が見つかりません'); }
+        }
+
+        function filterProducts() {
+            const q = document.getElementById('search-input').value.toLowerCase();
+            const filtered = products.filter(p => p.name.toLowerCase().includes(q) || p.jan.includes(q));
+            renderProducts(filtered);
+        }
+
+        function updateQty(id, delta) {
+            const item = cart.find(i => i.id === id);
+            if (!item) return;
+            item.qty += delta;
+            const orig = products.find(p => p.id === id);
+            if (orig) orig.stock -= delta;
+            if (item.qty <= 0) { cart = cart.filter(i => i.id !== id); }
+            playBeep(600, 'sine');
+            renderProducts(products);
+            updateCartUI();
+        }
+
+        function addBag(price) { addToCart({ id: 'bag_'+price, name: `レジ袋 (${price}円)`, price: price, taxRate: 0.10, stock: 999, ageLimit: false }); }
+        function addGiftWrap(price) { addToCart({ id: 'gift_'+price, name: 'ギフトラッピング', price: price, taxRate: 0.10, stock: 999, ageLimit: false }); }
+
+        function openCustomItemModal() { document.getElementById('custom-item-modal').classList.remove('hidden'); }
+        function addCustomItem() {
+            const name = document.getElementById('custom-name').value || '非登録商品';
+            const price = parseFloat(document.getElementById('custom-price').value) || 0;
+            addToCart({ id: 'custom_'+Date.now(), name: name, price: price, taxRate: 0.10, stock: 999, ageLimit: false });
+            closeModal('custom-item-modal');
+        }
+
+        function calculateTotals() {
+            let subtotal = 0, taxTotal = 0;
+            cart.forEach(item => {
+                const itemSubtotal = item.price * item.qty;
+                subtotal += itemSubtotal;
+                const effectiveTaxRate = isTaxFree ? 0 : item.taxRate;
+                taxTotal += itemSubtotal * effectiveTaxRate;
+            });
+            let grandTotal = subtotal + taxTotal;
+            let discountSum = discountAmount + (grandTotal * (discountPercent / 100)) + usedPoints;
+            grandTotal = Math.max(0, grandTotal - discountSum);
+            if (isRefundMode) grandTotal *= -1;
+            const earnedPoints = activeMember ? Math.floor(Math.max(0, grandTotal) * 0.01) : 0;
+            return { subtotal, taxTotal, discountSum, grandTotal, earnedPoints };
+        }
+
+        function updateCartUI() {
+            const cartContainer = document.getElementById('cart-items');
+            if (cart.length === 0) {
+                cartContainer.innerHTML = `<div class="text-center text-gray-400 py-10 text-sm">カートは空です</div>`;
+            } else {
+                cartContainer.innerHTML = cart.map(item => `
+                    <div class="flex justify-between items-center bg-white dark:bg-gray-800 p-2 rounded border dark:border-gray-700 text-sm">
+                        <div class="flex-1">
+                            <div class="font-bold">${item.name}</div>
+                            <div class="text-xs text-gray-500">¥${item.price} × ${item.qty} (税:${isTaxFree?0:item.taxRate*100}%)</div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="updateQty('${item.id}', -1)" class="w-6 h-6 bg-gray-200 dark:bg-gray-700 rounded font-bold">-</button>
+                            <span>${item.qty}</span>
+                            <button onclick="updateQty('${item.id}', 1)" class="w-6 h-6 bg-gray-200 dark:bg-gray-700 rounded font-bold">+</button>
+                            <button onclick="updateQty('${item.id}', -${item.qty})" class="text-red-500 font-bold ml-2">✕</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            const totals = calculateTotals();
+            document.getElementById('subtotal-val').innerText = `¥${Math.round(totals.subtotal)}`;
+            document.getElementById('tax-val').innerText = `¥${Math.round(totals.taxTotal)}`;
+            document.getElementById('discount-val').innerText = `-¥${Math.round(totals.discountSum)}`;
+            document.getElementById('points-val').innerText = `${totals.earnedPoints} pt`;
+            document.getElementById('total-val').innerText = `¥${Math.round(totals.grandTotal)}`;
+        }
+
+        function clearCart() { cart = []; discountAmount = 0; discountPercent = 0; usedPoints = 0; updateCartUI(); }
+
+        function toggleTaxFree() {
+            isTaxFree = !isTaxFree;
+            const btn = document.getElementById('taxfree-btn');
+            btn.innerText = `免税: ${isTaxFree ? 'ON (0%)' : 'OFF'}`;
+            btn.className = `px-2 py-1 text-xs border rounded ${isTaxFree ? 'bg-amber-500 text-white font-bold' : 'bg-white dark:bg-gray-800'}`;
+            updateCartUI();
+        }
+
+        function applyDiscount(type) {
+            if (type === 'percent') {
+                const p = prompt('割引率 (%) を入力してください:', '10');
+                if (p !== null) discountPercent = parseFloat(p) || 0;
+            } else {
+                const a = prompt('値引き額 (円) を入力してください:', '100');
+                if (a !== null) discountAmount = parseFloat(a) || 0;
+            }
+            updateCartUI();
+        }
+
+        function openMemberModal() { document.getElementById('member-modal').classList.remove('hidden'); }
+        function applyMember() {
+            const id = document.getElementById('member-id-input').value;
+            if (id) {
+                activeMember = { id: id, points: 500 };
+                document.getElementById('member-status').innerText = `認証済: ${id} (${activeMember.points}pt)`;
+                closeModal('member-modal');
+                playBeep(1200, 'sine');
+            }
+        }
+        function usePoints() {
+            if (!activeMember) { alert('先に会員スキャンを行ってください'); return; }
+            const pts = prompt(`利用ポイントを入力 (保有: ${activeMember.points}pt):`, '100');
+            if (pts) {
+                usedPoints = Math.min(activeMember.points, parseInt(pts) || 0);
+                updateCartUI();
+            }
+        }
+
+        function holdCart() {
+            if (cart.length === 0) return;
+            holds.push({ id: Date.now(), cart: [...cart] });
+            cart = [];
+            document.getElementById('hold-count').innerText = holds.length;
+            updateCartUI();
+            alert('会計を保留しました');
+        }
+        function openHoldList() {
+            if (holds.length === 0) { alert('保留中のカートはありません'); return; }
+            const restored = holds.pop();
+            cart = restored.cart;
+            document.getElementById('hold-count').innerText = holds.length;
+            updateCartUI();
+        }
+
+        function openDrawer() { playBeep(300, 'square', 0.3); alert('🔓 キャッシュドロワーを開放しました'); }
+        function toggleRefundMode() {
+            isRefundMode = !isRefundMode;
+            document.getElementById('refund-badge').classList.toggle('hidden', !isRefundMode);
+            updateCartUI();
+        }
+
+        function processPayment(type) {
+            if (cart.length === 0) { alert('カートが空です'); return; }
+            const totals = calculateTotals();
+            if (type === 'cash') {
+                document.getElementById('cash-modal-total').innerText = `¥${Math.round(totals.grandTotal)}`;
+                document.getElementById('cash-modal').classList.remove('hidden');
+            } else if (type === 'card' || type === 'qr') {
+                playBeep(1500, 'triangle', 0.2);
+                setTimeout(() => { completeTransaction(type, totals.grandTotal, 0); }, 800);
+            } else if (type === 'split') {
+                alert('併用払い: 現金とカード等の組み合わせ決済を行います');
+                completeTransaction('現金+カード併用', totals.grandTotal, 0);
+            }
+        }
+
+        function calcChange() {
+            const totals = calculateTotals();
+            const tendered = parseFloat(document.getElementById('tendered-input').value) || 0;
+            const change = tendered - totals.grandTotal;
+            document.getElementById('change-val').innerText = `¥${Math.max(0, Math.round(change))}`;
+        }
+
+        function completeCashTransaction() {
+            const totals = calculateTotals();
+            const tendered = parseFloat(document.getElementById('tendered-input').value) || 0;
+            if (tendered < totals.grandTotal && !isRefundMode) { alert('預かり金額が不足しています'); return; }
+            closeModal('cash-modal');
+            completeTransaction('現金', totals.grandTotal, tendered - totals.grandTotal);
+        }
+
+        function completeTransaction(payMethod, total, change) {
+            playBeep(1800, 'sine', 0.4);
+            zReportData.totalSales += total;
+            zReportData.count++;
+            if (payMethod === '現金') zReportData.cash += total;
+            else zReportData.card += total;
+
+            document.getElementById('receipt-date').innerText = new Date().toLocaleString();
+            document.getElementById('receipt-body').innerHTML = cart.map(i => `
+                <div class="flex justify-between">
+                    <span>${i.name} x${i.qty}</span>
+                    <span>¥${i.price * i.qty}</span>
+                </div>
+            `).join('');
+
+            document.getElementById('receipt-summary').innerHTML = `
+                <div class="flex justify-between font-bold border-t pt-1"><span>合計:</span><span>¥${Math.round(total)}</span></div>
+                <div class="flex justify-between text-[11px]"><span>決済方法:</span><span>${payMethod}</span></div>
+                ${payMethod === '現金' ? `<div class="flex justify-between text-[11px]"><span>お釣り:</span><span>¥${Math.round(change)}</span></div>` : ''}
+            `;
+
+            document.getElementById('receipt-modal').classList.remove('hidden');
+        }
+
+        function finishReceipt() { closeModal('receipt-modal'); clearCart(); }
+        function sendEReceipt() {
+            const email = prompt('送信先のメールアドレスを入力してください:', 'customer@example.com');
+            if (email) alert(`📧 ${email} に電子レシートを送信しました！`);
+        }
+
+        function openManagerModal() { document.getElementById('manager-modal').classList.remove('hidden'); }
+        function verifyPin() {
+            const pin = document.getElementById('pin-input').value;
+            if (pin === '1234') {
+                isManagerAuthenticated = true;
+                alert('🔑 管理者承認が完了しました');
+                closeModal('manager-modal');
+            } else { alert('パスコードが正しくありません'); }
+        }
+
+        function openZReport() {
+            document.getElementById('z-total').innerText = `¥${Math.round(zReportData.totalSales)}`;
+            document.getElementById('z-count').innerText = `${zReportData.count} 件`;
+            document.getElementById('z-cash').innerText = `¥${Math.round(zReportData.cash)}`;
+            document.getElementById('z-card').innerText = `¥${Math.round(zReportData.card)}`;
+            document.getElementById('zreport-modal').classList.remove('hidden');
+        }
+
+        function toggleDarkMode() { document.documentElement.classList.toggle('dark'); }
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            document.getElementById('sound-btn').innerText = `🔊 音声: ${soundEnabled ? 'ON' : 'OFF'}`;
+        }
+
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+    </script>
+</body>
+</html>
